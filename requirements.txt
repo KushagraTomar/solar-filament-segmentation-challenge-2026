@@ -7,15 +7,19 @@ scikit-learn
 matplotlib
 tqdm
 
-# Model training (targets cloud GPU; torch itself installs fine locally for
-# local dev/debugging on small crops, see README)
+# Model training. Install torch/torchvision from the wheel index matching your
+# actual NVIDIA driver's CUDA support, NOT plain `pip install torch` -- see the
+# "mmdetection install gotchas" section in README.md (a plain install silently
+# grabbed a CUDA build newer than the local driver supports here). e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 torch
 torchvision
 torchmetrics
 
-# Model framework: Cascade Mask R-CNN + HTC + PointRend all ship natively in mmdetection.
-# Install per https://mmdetection.readthedocs.io/en/latest/get_started.html (mmcv/mmengine
-# have platform-specific install commands, not pinned here).
-# mmengine
-# mmcv>=2.0.0
-# mmdet>=3.0.0
+# Model framework: PointRend ships natively in mmdetection (see README.md for
+# why PointRend was chosen over a Cascade R-CNN + HTC combination).
+# mmcv/mmdet need --no-build-isolation and an exact mmcv version matched to
+# your mmdet version (mmdet 3.3.0 needs mmcv<2.2.0) -- see README.md.
+mmengine
+mmcv==2.1.0
+mmdet==3.3.0
