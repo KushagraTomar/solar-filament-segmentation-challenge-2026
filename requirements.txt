@@ -1,0 +1,21 @@
+# Data pipeline (usable locally, CPU-only)
+pycocotools
+numpy
+opencv-python-headless
+pandas
+scikit-learn
+matplotlib
+tqdm
+
+# Model training (targets cloud GPU; torch itself installs fine locally for
+# local dev/debugging on small crops, see README)
+torch
+torchvision
+torchmetrics
+
+# Model framework: Cascade Mask R-CNN + HTC + PointRend all ship natively in mmdetection.
+# Install per https://mmdetection.readthedocs.io/en/latest/get_started.html (mmcv/mmengine
+# have platform-specific install commands, not pinned here).
+# mmengine
+# mmcv>=2.0.0
+# mmdet>=3.0.0
