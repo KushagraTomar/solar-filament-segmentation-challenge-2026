@@ -34,7 +34,15 @@ pip install -r requirements.txt
 - `pip install mmcv`/`mmdet` needs `--no-build-isolation` (their setup.py
   imports `pkg_resources`, which recent `setuptools` no longer bundles by
   default in an isolated build env) and `mmcv==2.1.0` specifically (mmdet
-  3.3.0 requires `mmcv<2.2.0`).
+  3.3.0 requires `mmcv<2.2.0`). `--no-build-isolation` only helps if the
+  *ambient* environment's own setuptools still has `pkg_resources` --
+  explicitly run `pip install "setuptools<81" wheel` first (pin, don't `-U`/
+  upgrade: upgrading grabs the latest setuptools, which is the exact thing
+  that drops `pkg_resources` and reintroduces the "egg_info did not run
+  successfully" error). This worked without the explicit pin locally only
+  because the venv's ambient setuptools happened to already be old enough --
+  don't rely on that in a fresh environment (bit us this way on a Kaggle
+  notebook).
 - **Check `torch.cuda.is_available()` right after installing torch.** A
   plain `pip install torch` can silently grab a `cuXXX` build newer than
   what your NVIDIA driver supports (this happened locally: driver
@@ -42,6 +50,17 @@ pip install -r requirements.txt
   cu130 build) -- `cuda.is_available()` returns `False` with no error in
   that case. Install explicitly from the matching wheel index, e.g.
   `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124`.
+- **`torch.cuda.is_available() == True` is NOT sufficient** -- it can still be
+  `True` while the installed torch build has no compiled kernels for your
+  specific GPU's compute capability, failing later with `AcceleratorError: no
+  kernel image is available for execution on the device` (hit this on a
+  Kaggle notebook: the pre-installed `torch==2.10.0+cu128` only had kernels
+  for `sm_70` and newer, but Kaggle's "GPU P100" accelerator option is Pascal,
+  `sm_60` -- recent PyTorch releases have dropped Pascal support). Check the
+  actual GPU name against the torch build's supported architectures (its
+  NVCC gencode flags, visible in `torch.__config__.show()`) before training,
+  not just whether CUDA initializes. On Kaggle specifically: prefer the
+  "GPU T4 x2" accelerator (`sm_75`) over "GPU P100" for this reason.
 - If you change the torch build after mmcv is already installed, **force a
   clean mmcv rebuild** (`pip uninstall mmcv && pip cache remove mmcv && pip
   install --no-cache-dir --no-build-isolation mmcv==2.1.0`) -- mmcv's
@@ -56,7 +75,7 @@ Usage below); GPU memory usage in that test was ~880MB.
 
 ## Project layout
 
-```
+```text
 data/
   raw/MAGFiLO_1.0_Kaggle_2026/   # unzipped Kaggle download (train/test images + train annotations JSON)
   splits/                        # generated train/val split + per-split COCO JSONs
@@ -124,6 +143,14 @@ MAGFiLO-specific:
   of `class_agnostic=True` (unlike the base `FCNMaskHead`, which respects
   it correctly). `MaskPointHead` does not have this bug. See
   `src/mmdet_plugins/losses/dice_loss.py` docstring.
+- **The config's `lr=0.02` assumes batch_size=16** (`auto_scale_lr.base_batch_size`
+  in the config). Running at a smaller batch size with the raw LR -- and no
+  warmup -- diverges to `NaN` within ~10 iterations on freshly-initialized
+  detection heads. `src/scripts/train.py` now applies the linear LR scaling
+  rule automatically and keeps the (iteration-based, `by_epoch=False`)
+  warmup scheduler even when `--max-iters` overrides the epoch-based decay
+  schedule -- verified fixed: loss now drops cleanly over 150 real iterations
+  instead of NaN-ing out.
 - **mmdet's built-in `DiceLoss` silently produces a zero loss under
   `class_agnostic=True`.** The mask/point heads always call
   `loss_mask(pred, target, label)`, where `label` is per-instance class index
@@ -159,10 +186,84 @@ python -m src.scripts.visualize_sample \
 # Smoke-test the mmdet config end-to-end on real data (small crop, few iterations,
 # safe to run on the local 4GB GPU; use after any config/plugin change)
 python -m src.scripts.smoke_test_config --config configs/pointrend_r50_fpn_magfilo.py
+
+# Longer local confidence check -- confirms the loss actually decreases (not just
+# "no crash"). Applies the linear LR-scaling rule for whatever batch size you pass,
+# and keeps the iteration-based warmup even when overriding the epoch schedule --
+# skipping either of those diverges to NaN within ~10 iterations (this bit us once).
+python -m src.scripts.train --config configs/pointrend_r50_fpn_magfilo.py \
+  --work-dir outputs/train_confidence_check --max-iters 150 --crop 512 --batch-size 1 --log-interval 10
 ```
+
+### Kaggle Notebook (real training)
+
+`notebooks/kaggle_train.py` has the cell-by-cell setup for running real
+training on Kaggle's free GPU notebooks (this competition is CSV-upload
+only, not a code competition, so there's no internet-off / kernel-submission
+constraint here -- the notebook is just a GPU compute environment). Steps:
+
+1. Zip the code: `zip -r outputs/kaggle_package/magfilo_code.zip src configs requirements.txt README.md -x "*__pycache__*"`
+   (already done once, in `outputs/kaggle_package/magfilo_code.zip`).
+2. Upload that zip as a new private Kaggle Dataset via the Kaggle web UI --
+   not automated here, since it needs your Kaggle account credentials.
+3. Create a new Notebook, attach your uploaded code dataset + this
+   competition's dataset as inputs, enable GPU.
+4. Check the actual mount paths under `/kaggle/input/` (exact folder names
+   depend on the dataset slugs Kaggle assigns) and adjust `CODE_DIR` /
+   `DATA_ROOT` at the top of `notebooks/kaggle_train.py` to match -- these
+   are reasonable guesses, not verified against a real Kaggle environment.
+5. Paste the rest of the cells in and run.
+6. Before the session ends, download the checkpoint from the Kaggle
+   "Output" tab -- Kaggle notebook sessions aren't persistent storage.
+
+## Inference / submission
+
+`src/scripts/predict.py` runs a trained checkpoint over the test set and
+writes the submission CSV, using mmdet's own `init_detector`/
+`inference_detector` (same preprocessing/rescale path as training/val,
+rather than a hand-rolled reimplementation):
+
+```bash
+python -m src.scripts.predict \
+  --config configs/pointrend_r50_fpn_magfilo.py \
+  --checkpoint /path/to/epoch_12.pth \
+  --test-images-dir data/raw/MAGFiLO_1.0_Kaggle_2026/test/test_images \
+  --out outputs/submission.csv \
+  --score-thr 0.3
+```
+
+Verified end-to-end against a real 12-epoch Kaggle-trained checkpoint. Two
+more real bugs found and fixed along the way, both in
+`src/mmdet_plugins/patches.py` and this script:
+
+- **A second, deeper consequence of `CoarseMaskHead`'s `class_agnostic` bug**
+  (see the mmdet gotchas above) -- it also breaks mmdet's own
+  `PointRendRoIHead._mask_point_forward_test` at inference time (not just the
+  training loss): the point head's single-channel refinement can't be
+  `scatter_`ed into the coarse head's still-multi-channel prediction as mmdet
+  wrote it. `apply_pointrend_test_patch()` fixes this by keeping the coarse
+  features at their real (4-channel) width where `MaskPointHead`'s trained fc
+  layers need it, but writing the refined value into only the predicted-class
+  channel per instance, then reducing to that one channel right before
+  `_predict_by_feat_single` (which otherwise assumes the tensor's already
+  reduced when `class_agnostic=True`). See the file's docstring for the full
+  chain of reasoning -- this took three iterations to get right.
+- **torch >=2.6 checkpoint loading**: defaults `torch.load` to
+  `weights_only=True`, which rejects mmengine's own non-tensor checkpoint
+  contents (`HistoryBuffer`, numpy internals in the optimizer state).
+  Allowlisting classes one at a time is unbounded; `predict.py` just disables
+  the restriction outright, safe here since it's our own trusted checkpoint.
+- **Local 4GB GPU OOMs on crowded images** (many instances pasted into a
+  2048x2048 canvas at once) -- `predict.py` clears the CUDA cache between
+  images (fixed it in practice) and catches OOM per-image as a fallback
+  (skips that image with a warning rather than losing the whole run); pass
+  `--device cpu` for a slower but memory-ceiling-free run if needed.
 
 ## Next steps
 
+- Run inference over the full 180-image test set (only sanity-checked on a
+  handful of images so far) and do a final review of the submission CSV
+  before uploading.
 - Decide the 2048x2048 input strategy (tile vs. resize vs. high-res-native
   backbone) -- flagged during architecture design, still open; the config
   currently uses a 1024x1024 resize placeholder.
@@ -173,6 +274,6 @@ python -m src.scripts.smoke_test_config --config configs/pointrend_r50_fpn_magfi
 - Write a custom Dice/IoU validation script matching the competition rubric
   (mean Dice, Dice/IoU distributions, one-to-many/many-to-one matching) --
   mmdet's built-in `CocoMetric` isn't a fit (see gotchas above).
-- Real training run on a cloud GPU (local 4GB card is smoke-test only).
-- Inference script: run trained model on `test/test_images`, convert
-  predicted instance masks to RLE via `src/utils/rle.py`, write submission CSV.
+- Consider the U-Net-as-refiner design discussed (per-instance crop
+  refinement stage on top of PointRend's output, giving clDice/spine
+  supervision a tractable home) -- not yet built.

@@ -1,0 +1,3 @@
+- Spine-based clDice loss — the module (src/losses/cldice.py) still exists and is tested standalone, but it's not plugged into this pipeline yet. It operates on full-image masks; CoarseMaskHead/MaskPointHead operate on small per-RoI crops, so it needs the same per-RoI cropping applied to the rasterized spine before it can supervise these heads — that's the next real integration task, not yet done.
+
+- Still open after that: the 2048×2048 resolution decision, wiring clDice/spine supervision into the mask heads, a custom Dice/IoU validation script, and inference→submission CSV.
