@@ -1,6 +1,5 @@
 .venv/
 __pycache__/
 *.pyc
-data/raw/
-data/splits/
-outputs/
+.ipynb_checkpoints/
+data/
