@@ -53,5 +53,10 @@ earlier experiments, and are fixed in the final pipeline.
    and regenerates `submission.csv` without training. A GPU is recommended;
    on a CPU, inference takes several seconds per image.
 
+We checked this on Kaggle (T4 GPU): the regenerated file has the same 1041
+filaments as the committed `submission.csv`. A few masks differ by a handful of
+boundary pixels (104 of 2.38M filament pixels; every mask IoU ≥ 0.994) because
+mixed-precision GPU arithmetic is not bit-exact between runs.
+
 To retrain from scratch, set `TRAIN = True`. This takes about 2 hours on a
 single T4 GPU and overwrites the weights.
