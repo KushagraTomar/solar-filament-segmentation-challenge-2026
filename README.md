@@ -40,6 +40,7 @@ earlier experiments, and are fixed in the final pipeline.
 | `weights/unet_effb3.pth` | trained model weights, loaded by the notebook |
 | `requirements.txt` | exact package versions used |
 | `submission.csv` | the submitted predictions |
+| `kaggle_run/training_run.ipynb` | the executed Kaggle notebook (single T4) that trained `weights/unet_effb3.pth` and produced `submission.csv`, with its training log |
 
 ## Reproducing the predictions
 
